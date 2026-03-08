@@ -20,3 +20,4 @@ class BusinessCreate(BaseModel):
     description: str = ""
     services: list[ServiceItem] = []
     schedule: dict[str, DaySchedule] = {}
+    owner_id: str = ""

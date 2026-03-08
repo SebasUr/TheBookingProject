@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchBusinesses } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function Home() {
+  const { user } = useAuth();
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -22,8 +24,8 @@ export default function Home() {
       {businesses.length === 0 ? (
         <div className="empty">
           No businesses yet.{" "}
-          <Link to="/admin" style={{ color: "#1a1a1a" }}>
-            Create one
+          <Link to="/login" style={{ color: "#1a1a1a" }}>
+            Register your business
           </Link>
         </div>
       ) : (
@@ -35,7 +37,9 @@ export default function Home() {
               <p>{b.services?.length || 0} services</p>
               <div className="card-actions">
                 <Link to={`/book/${b.id}`}>Book</Link>
-                <Link to={`/analytics/${b.id}`}>Analytics</Link>
+                {user && user.id === b.owner_id && (
+                  <Link to={`/analytics/${b.id}`}>Analytics</Link>
+                )}
               </div>
             </div>
           ))}

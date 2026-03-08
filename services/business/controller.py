@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from models import BusinessCreate
 
 router = APIRouter()
@@ -11,11 +11,14 @@ async def list_businesses():
 
 
 @router.post("/", status_code=201)
-async def create_business(data: BusinessCreate):
+async def create_business(data: BusinessCreate, x_user_id: str = Header(None)):
     existing = await repo.find_by_slug(data.slug)
     if existing:
         raise HTTPException(400, "slug already exists")
-    return await repo.create(data.model_dump())
+    payload = data.model_dump()
+    # owner_id comes from the gateway after JWT validation
+    payload["owner_id"] = x_user_id or ""
+    return await repo.create(payload)
 
 
 @router.get("/slug/{slug}")

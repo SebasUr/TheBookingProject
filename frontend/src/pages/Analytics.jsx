@@ -5,13 +5,18 @@ import {
   getAnalyticsSummary,
   getBookings,
   cancelBooking,
+  getBusiness,
 } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function Analytics() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [totals, setTotals] = useState(null);
   const [summary, setSummary] = useState([]);
   const [bookings, setBookings] = useState([]);
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   function loadData() {
     getAnalyticsTotals(id).then(setTotals);
@@ -20,12 +25,31 @@ export default function Analytics() {
   }
 
   useEffect(() => {
-    loadData();
+    // Verify ownership before loading analytics
+    getBusiness(id).then((business) => {
+      if (!business || business.owner_id !== user?.id) {
+        setAccessDenied(true);
+      } else {
+        loadData();
+      }
+      setLoading(false);
+    });
   }, [id]);
 
   async function handleCancel(bookingId) {
     await cancelBooking(bookingId);
     loadData();
+  }
+
+  if (loading) return <p className="empty">Loading...</p>;
+
+  if (accessDenied) {
+    return (
+      <div>
+        <Link to="/" className="back-link">Back</Link>
+        <p className="empty">You don&apos;t have permission to view this page.</p>
+      </div>
+    );
   }
 
   return (
