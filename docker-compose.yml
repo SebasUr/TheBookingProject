@@ -1,0 +1,100 @@
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  gateway:
+    build: ./gateway
+    ports:
+      - "8000:8000"
+    environment:
+      BUSINESS_SERVICE_URL: http://business-service:8001
+      BOOKING_SERVICE_URL: http://booking-service:8002
+      PAYMENT_SERVICE_URL: http://payment-service:8003
+      ANALYTICS_SERVICE_URL: http://analytics-service:8004
+    depends_on:
+      - business-service
+      - booking-service
+      - payment-service
+      - analytics-service
+
+  business-service:
+    build: ./services/business
+    ports:
+      - "8001:8001"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: business_db
+      REDIS_URL: redis://redis:6379
+      PORT: "8001"
+    depends_on:
+      - mongo
+      - redis
+
+  booking-service:
+    build: ./services/booking
+    ports:
+      - "8002:8002"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: booking_db
+      REDIS_URL: redis://redis:6379
+      BUSINESS_SERVICE_URL: http://business-service:8001
+      PAYMENT_SERVICE_URL: http://payment-service:8003
+      PORT: "8002"
+    depends_on:
+      - mongo
+      - redis
+
+  payment-service:
+    build: ./services/payment
+    ports:
+      - "8003:8003"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: payment_db
+      REDIS_URL: redis://redis:6379
+      PORT: "8003"
+    depends_on:
+      - mongo
+      - redis
+
+  analytics-service:
+    build: ./services/analytics
+    ports:
+      - "8004:8004"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: analytics_db
+      REDIS_URL: redis://redis:6379
+      PORT: "8004"
+    depends_on:
+      - mongo
+      - redis
+
+  notification-service:
+    build: ./services/notification
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      API_URL: http://gateway:8000
+    depends_on:
+      - gateway
+
+volumes:
+  mongo_data:
