@@ -1,17 +1,9 @@
 import os
+from contextlib import asynccontextmanager
+
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="Booking Platform - API Gateway")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 ROUTES = {
     "businesses": os.getenv("BUSINESS_SERVICE_URL", "http://localhost:8001"),
@@ -20,6 +12,11 @@ ROUTES = {
     "analytics": os.getenv("ANALYTICS_SERVICE_URL", "http://localhost:8004"),
     "auth": os.getenv("AUTH_SERVICE_URL", "http://localhost:8005"),
 }
+
+AUTH_TIMEOUT = 5.0
+PROXY_TIMEOUT = 30.0
+POOL_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+CLIENTS: dict[str, httpx.AsyncClient] = {}
 
 # Routes that require a valid JWT token.
 # Entries are (METHOD, service, path_prefix) — empty prefix means "all paths".
@@ -33,18 +30,52 @@ PROTECTED_ROUTES = [
 ]
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    for service in ROUTES:
+        timeout = AUTH_TIMEOUT if service == "auth" else PROXY_TIMEOUT
+        CLIENTS[service] = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            limits=POOL_LIMITS,
+        )
+    yield
+    for client in CLIENTS.values():
+        await client.aclose()
+    CLIENTS.clear()
+
+
+app = FastAPI(title="Booking Platform - API Gateway", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 async def _get_user_from_token(authorization: str | None) -> dict | None:
     """Call auth service to validate the Bearer token. Returns user payload or None."""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        client = CLIENTS.get("auth")
+        if not client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(AUTH_TIMEOUT)
+            ) as temp_client:
+                resp = await temp_client.post(
+                    f"{ROUTES['auth']}/validate",
+                    headers={"Authorization": authorization},
+                )
+        else:
             resp = await client.post(
                 f"{ROUTES['auth']}/validate",
                 headers={"Authorization": authorization},
             )
-            if resp.status_code == 200:
-                return resp.json()
+        if resp.status_code == 200:
+            return resp.json()
     except Exception:
         pass
     return None
@@ -84,7 +115,19 @@ async def _proxy(service: str, path: str, request: Request) -> Response:
         headers["X-User-Id"] = user["user_id"]
 
     url = f"{base_url}/{path}" if path else f"{base_url}/"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client = CLIENTS.get(service)
+    if not client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(PROXY_TIMEOUT)
+        ) as temp_client:
+            resp = await temp_client.request(
+                method=request.method,
+                url=url,
+                content=await request.body(),
+                headers=headers,
+                params=dict(request.query_params),
+            )
+    else:
         resp = await client.request(
             method=request.method,
             url=url,
