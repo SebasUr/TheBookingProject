@@ -2,6 +2,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from models import PaymentCreate
 from circuit_breaker import CircuitBreaker
+from metrics import PAYMENTS_COMPLETED, PAYMENTS_FAILED, PAYMENTS_CIRCUIT_OPEN
 
 router = APIRouter()
 repo = None
@@ -25,6 +26,7 @@ async def call_external_payment_provider(amount: float) -> dict:
 async def create_payment(data: PaymentCreate):
     # Circuit breaker check
     if not circuit_breaker.can_execute():
+        PAYMENTS_CIRCUIT_OPEN.inc()
         raise HTTPException(
             503,
             f"Payment service unavailable (circuit: {circuit_breaker.get_state()})",
@@ -36,6 +38,7 @@ async def create_payment(data: PaymentCreate):
         circuit_breaker.record_success()
     except Exception:
         circuit_breaker.record_failure()
+        PAYMENTS_FAILED.inc()
         raise HTTPException(502, "Payment provider failed")
 
     payment = await repo.create(
@@ -49,6 +52,9 @@ async def create_payment(data: PaymentCreate):
 
     if event_publisher:
         await event_publisher.publish("payment.completed", payment)
+
+    if payment.get("status") == "completed":
+        PAYMENTS_COMPLETED.inc()
 
     return payment
 

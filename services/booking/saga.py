@@ -3,6 +3,7 @@ import random
 
 import httpx
 from events import EventPublisher
+from metrics import BOOKINGS_CONFIRMED, BOOKINGS_CANCELLED
 
 PAYMENT_MAX_ATTEMPTS = 3
 PAYMENT_BASE_DELAY = 0.2
@@ -69,6 +70,7 @@ class BookingSaga:
                         booking_id, "confirmed", booking["version"]
                     )
                     await self.events.publish("booking.confirmed", confirmed)
+                    BOOKINGS_CONFIRMED.inc()
                     return confirmed
 
             # Step 3b: Payment failed -> compensating transaction
@@ -76,6 +78,7 @@ class BookingSaga:
                 booking_id, "cancelled", booking["version"]
             )
             await self.events.publish("booking.cancelled", cancelled)
+            BOOKINGS_CANCELLED.inc()
             return cancelled
 
         except Exception:
@@ -85,6 +88,7 @@ class BookingSaga:
                     booking_id, "cancelled", booking["version"]
                 )
                 await self.events.publish("booking.cancelled", cancelled)
+                BOOKINGS_CANCELLED.inc()
                 return cancelled
             except Exception:
                 return booking

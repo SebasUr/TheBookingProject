@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 ROUTES = {
     "businesses": os.getenv("BUSINESS_SERVICE_URL", "http://localhost:8001"),
@@ -52,6 +53,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
 )
 
 

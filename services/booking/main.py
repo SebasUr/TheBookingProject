@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
+from prometheus_fastapi_instrumentator import Instrumentator
 from controller import router
 import controller
 from repository import BookingRepository
@@ -47,6 +48,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Booking Service", lifespan=lifespan)
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
+)
 app.include_router(router)
 
 if __name__ == "__main__":

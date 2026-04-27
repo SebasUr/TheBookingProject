@@ -4,6 +4,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 from contextlib import asynccontextmanager
+from prometheus_fastapi_instrumentator import Instrumentator
 from controller import router
 import controller
 from repository import PaymentRepository
@@ -35,6 +36,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Payment Service", lifespan=lifespan)
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
+)
 app.include_router(router)
 
 if __name__ == "__main__":
