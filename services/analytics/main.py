@@ -1,11 +1,16 @@
 import os
+from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
-from contextlib import asynccontextmanager
 from controller import router
 import controller
 from repository import AnalyticsWriteRepository, AnalyticsReadRepository
 from event_handler import AnalyticsEventHandler
+
+BUSINESS_TIMEOUT = 5.0
+POOL_LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
 
 @asynccontextmanager
@@ -15,6 +20,10 @@ async def lifespan(app: FastAPI):
     write_repo = AnalyticsWriteRepository(db)
     read_repo = AnalyticsReadRepository(db)
     controller.read_repo = read_repo
+    controller.business_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(BUSINESS_TIMEOUT),
+        limits=POOL_LIMITS,
+    )
 
     handler = AnalyticsEventHandler(
         os.getenv("REDIS_URL", "redis://localhost:6379"),
@@ -26,6 +35,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await handler.stop()
+    await controller.business_client.aclose()
     client.close()
 
 

@@ -7,6 +7,7 @@ router = APIRouter()
 repo = None
 saga = None
 business_service_url = None
+business_client = None
 
 
 @router.get("/")
@@ -21,11 +22,19 @@ async def get_available_slots(
     date: str = Query(...),
 ):
     # Fetch business config from Business Service
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{business_service_url}/{business_id}")
-        if resp.status_code != 200:
-            raise HTTPException(404, "business not found")
-        business = resp.json()
+    if business_client is None:
+        raise HTTPException(500, "business client not configured")
+    try:
+        resp = await business_client.get(
+            f"{business_service_url}/{business_id}"
+        )
+    except httpx.RequestError:
+        raise HTTPException(503, "business service unavailable")
+    if resp.status_code == 404:
+        raise HTTPException(404, "business not found")
+    if resp.status_code != 200:
+        raise HTTPException(503, "business service unavailable")
+    business = resp.json()
 
     # Find the service definition
     service = None
