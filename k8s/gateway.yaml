@@ -29,6 +29,13 @@ spec:
               value: http://auth-service:8005
           ports:
             - containerPort: 8000
+          resources:
+            requests:
+              cpu: 150m
+              memory: 192Mi
+            limits:
+              cpu: 700m
+              memory: 768Mi
           readinessProbe:
             httpGet:
               path: /health

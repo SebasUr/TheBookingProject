@@ -21,6 +21,10 @@ spec:
           env:
             - name: TARGET_HOST
               value: http://gateway:8000
+            - name: BOOKING_INTENT_RATE
+              value: "0.45"
+            - name: CANCEL_AFTER_BOOKING_RATE
+              value: "0.08"
           ports:
             - containerPort: 8089
           volumeMounts:

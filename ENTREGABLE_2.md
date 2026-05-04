@@ -159,3 +159,232 @@ Flujo de compensación (si el pago falla o lanza excepción):
 - El estado queda consistente aunque la transacción no se completó.
 
 El bloqueo optimista dentro de la saga es importante: garantiza que si dos procesos intentan confirmar o cancelar la misma reserva simultáneamente, solo uno lo logrará y el otro recibirá un `409 Conflict`.
+
+---
+
+## Diagramas de arquitectura
+
+### Vista general del sistema
+
+```mermaid
+flowchart TD
+    subgraph CLIENT["Cliente"]
+        FE["Frontend\nReact + Vite  :3000\nLocalStorage: auth_token"]
+    end
+
+    subgraph GW_BOX["API Gateway  :8000"]
+        GW["FastAPI\nProxy dinamico  /api/service/path\nAuth Guard JWT  rutas protegidas\nCORS global  inyecta X-User-Id"]
+    end
+
+    subgraph SVCS["Microservicios"]
+        AUTH["auth-service  :8005\nPOST /register  POST /login\nPOST /validate  GET /me\nJWT HS256  expiry 7 dias\nbcrypt password hash"]
+
+        BIZ["business-service  :8001\nGET /  POST /  GET /:id\nPUT /:id  DELETE /:id\nGET /slug/:slug\nServiceItem  DaySchedule  slug unico\nowner_id desde X-User-Id"]
+
+        BOOK["booking-service  :8002\nGET /  GET /slots  POST /\nGET /:id  POST /:id/cancel\nSaga Orchestrator\nOptimistic Lock  campo version\n409 Conflict si version no coincide"]
+
+        PAY["payment-service  :8003\nPOST /  GET /:id\nGET /booking/:id\nGET /circuit-breaker/status\nCircuit Breaker\nthreshold=3  timeout=30s\nCLOSED - OPEN - HALF_OPEN"]
+
+        AN["analytics-service  :8004\nGET /summary/:id\nGET /totals/:id\nCQRS Write + Read\nowner guard via business-service\nAnalyticsEventHandler async"]
+
+        NOTIF["notification-service\nSin HTTP\nSubscriptor Redis\nSimula emails y logs\nbooking.created  confirmed\ncancelled  payment.completed"]
+    end
+
+    subgraph INFRA["Infraestructura  Docker Compose"]
+        REDIS[("Redis  :6379\nPub/Sub\nchannel: domain_events")]
+        MONGO[("MongoDB  :27017\nauth_db\nbusiness_db\nbooking_db\npayment_db\nanalytics_db")]
+    end
+
+    EXT["Payment Provider Externo\nStripe  MercadoPago\nSimulado con uuid ref"]
+
+    %% ── Client → Gateway ──────────────────────────────────────────────
+    FE -->|"HTTP REST  /api/*"| GW
+
+    %% ── Gateway Routing (proxy dinamico) ─────────────────────────────
+    GW -->|"/api/auth/*"| AUTH
+    GW -->|"/api/businesses/*"| BIZ
+    GW -->|"/api/bookings/*"| BOOK
+    GW -->|"/api/payments/*"| PAY
+    GW -->|"/api/analytics/*  JWT required"| AN
+    GW -. "POST /validate\ninterno sin pasar por /api" .-> AUTH
+
+    %% ── Sync inter-service HTTP ───────────────────────────────────────
+    BOOK -->|"GET /{id}\nobtiener horario y ServiceItems"| BIZ
+    AN -->|"GET /{id}\nverifica owner_id del negocio"| BIZ
+    BOOK -->|"BookingSaga\nPOST /  body: booking_id amount"| PAY
+
+    %% ── Payment → External (Circuit Breaker guard) ───────────────────
+    PAY -->|"CircuitBreaker.can_execute\ncall_external_payment_provider"| EXT
+
+    %% ── Redis Pub/Sub (async event-driven) ───────────────────────────
+    BOOK -->|"EventPublisher.publish\nbooking.created\nbooking.confirmed\nbooking.cancelled"| REDIS
+    PAY -->|"EventPublisher.publish\npayment.completed"| REDIS
+    REDIS -->|"SUBSCRIBE domain_events\nCQRS projection"| AN
+    REDIS -->|"SUBSCRIBE domain_events\nsimulated email / log"| NOTIF
+
+    %% ── Persistence (Database per Service) ───────────────────────────
+    AUTH -. "auth_db\ncol: users" .-> MONGO
+    BIZ -. "business_db\ncol: businesses" .-> MONGO
+    BOOK -. "booking_db\ncol: bookings" .-> MONGO
+    PAY -. "payment_db\ncol: payments" .-> MONGO
+    AN -. "analytics_db\ncol: events + summaries" .-> MONGO
+
+    classDef svc fill:#1a4f6e,stroke:#0d2d3f,color:#fff
+    classDef gw fill:#7b241c,stroke:#4a0e0a,color:#fff
+    classDef infra fill:#6e5a1a,stroke:#3f330a,color:#fff
+    classDef ext fill:#4a216e,stroke:#2a0f40,color:#fff
+    classDef cli fill:#1a6e3d,stroke:#0a3f20,color:#fff
+
+    class AUTH,BIZ,BOOK,PAY,AN,NOTIF svc
+    class GW gw
+    class REDIS,MONGO infra
+    class EXT ext
+    class FE cli
+```
+
+---
+
+### Flujo Saga: Reserva → Pago (camino feliz y compensacion)
+
+```mermaid
+sequenceDiagram
+    actor C as Cliente
+    participant GW as API Gateway
+    participant BOOK as booking-service
+    participant BIZ as business-service
+    participant REDIS as Redis
+    participant PAY as payment-service
+    participant EXT as Payment Provider
+    participant AN as analytics-service
+    participant NOTIF as notification-service
+
+    C->>GW: POST /api/bookings
+    GW->>GW: validate JWT Bearer token
+    GW->>AUTH: POST /validate {Authorization: Bearer ...}
+    AUTH-->>GW: 200 {user_id, email}
+    GW->>GW: inject header X-User-Id
+    GW->>BOOK: POST / {business_id, service_name, date, time_slot, amount}
+
+    BOOK->>BOOK: repo.create() → status=pending  version=1
+    Note over BOOK,PAY: BookingSaga.execute(booking)
+
+    BOOK->>REDIS: PUBLISH booking.created
+    REDIS-->>AN: _handle → increment total_bookings<br/>store raw event (write side)
+    REDIS-->>NOTIF: log booking pending
+
+    BOOK->>PAY: POST / {booking_id, amount}
+
+    alt CircuitBreaker CLOSED o HALF_OPEN
+        PAY->>PAY: CircuitBreaker.can_execute() → true
+        PAY->>EXT: call_external_payment_provider(amount)
+        EXT-->>PAY: {provider_ref: pay_xxxx, status: completed}
+        PAY->>PAY: repo.create() → guardar payment en MongoDB
+        PAY->>REDIS: PUBLISH payment.completed
+        REDIS-->>NOTIF: log payment completed
+        PAY-->>BOOK: 201 {status: completed, provider_ref}
+        PAY->>PAY: circuit_breaker.record_success()
+
+        BOOK->>BOOK: find_one_and_update {_id, version=1}<br/>→ set status=confirmed  inc version=2
+        Note over BOOK: Optimistic Lock: 409 si version ya cambio
+
+        BOOK->>REDIS: PUBLISH booking.confirmed
+        REDIS-->>AN: increment confirmed_bookings + total_revenue
+        REDIS-->>NOTIF: simulated email confirmacion a cliente
+
+        BOOK-->>GW: 201 {id, status: confirmed, version: 2}
+        GW-->>C: 201 Reserva confirmada
+
+    else CircuitBreaker OPEN (3 fallos anteriores)
+        PAY->>PAY: CircuitBreaker.can_execute() → false
+        PAY-->>BOOK: 503 Payment service unavailable
+        Note over BOOK: Compensacion (rollback saga)
+        BOOK->>BOOK: find_one_and_update {_id, version=1}<br/>→ set status=cancelled  inc version=2
+        BOOK->>REDIS: PUBLISH booking.cancelled
+        REDIS-->>AN: increment cancelled_bookings
+        REDIS-->>NOTIF: simulated email cancelacion a cliente
+        BOOK-->>GW: {status: cancelled}
+        GW-->>C: Reserva cancelada (pago fallido)
+
+    else Fallo del proveedor externo
+        PAY->>EXT: call_external_payment_provider(amount)
+        EXT-->>PAY: Exception / timeout
+        PAY->>PAY: circuit_breaker.record_failure()<br/>failure_count += 1
+        PAY-->>BOOK: 502 Payment provider failed
+        Note over BOOK: Compensacion identica al caso anterior
+        BOOK->>BOOK: status=cancelled  version=2
+        BOOK->>REDIS: PUBLISH booking.cancelled
+        REDIS-->>AN: increment cancelled_bookings
+        REDIS-->>NOTIF: simulated email cancelacion
+        BOOK-->>GW: {status: cancelled}
+        GW-->>C: Reserva cancelada (proveedor fallo)
+    end
+```
+
+---
+
+### CQRS en analytics-service
+
+```mermaid
+flowchart LR
+    subgraph PRODUCERS["Productores de eventos"]
+        BOOK_P["booking-service\nbooking.created\nbooking.confirmed\nbooking.cancelled"]
+        PAY_P["payment-service\npayment.completed"]
+    end
+
+    REDIS[("Redis\ndomain_events")]
+
+    subgraph AN_SVC["analytics-service"]
+        EH["AnalyticsEventHandler\nasyncio task\n_listen  _handle"]
+
+        subgraph WRITE_SIDE["Write Side  (log inmutable)"]
+            WR["AnalyticsWriteRepository\nstore_event(event)"]
+            EV[("analytics_db\ncol: events\nRaw event log")]
+        end
+
+        subgraph READ_SIDE["Read Side  (proyeccion agregada)"]
+            RR["AnalyticsReadRepository\nincrement_summary()\nincrement_service_count()\nget_summary()  get_totals()"]
+            SU[("analytics_db\ncol: summaries\nbusiness_id + date\ntotal_bookings\nconfirmed_bookings\ncancelled_bookings\ntotal_revenue\nbookings_by_service{}")]
+        end
+    end
+
+    subgraph QUERIES["Consultas  (read-optimized)"]
+        API_AN["GET /summary/:id\nGET /totals/:id\nowner guard via HTTP\nbusiness-service"]
+    end
+
+    BOOK_P -->|"PUBLISH"| REDIS
+    PAY_P -->|"PUBLISH"| REDIS
+    REDIS -->|"SUBSCRIBE asyncio"| EH
+    EH -->|"store raw event"| WR
+    WR --> EV
+    EH -->|"update counters\nno toca events"| RR
+    RR --> SU
+    API_AN -->|"query directo\nnunca toca events"| RR
+
+    classDef write fill:#1a5276,stroke:#0d2d40,color:#fff
+    classDef read fill:#145a32,stroke:#0a3318,color:#fff
+    classDef infra fill:#6e5a1a,stroke:#3f330a,color:#fff
+    classDef svc fill:#4a1a6e,stroke:#280a3f,color:#fff
+
+    class WR,EV write
+    class RR,SU read
+    class REDIS infra
+    class EH,API_AN svc
+```
+
+---
+
+### Circuit Breaker en payment-service
+
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+
+    CLOSED --> CLOSED : record_success\nfailure_count = 0
+    CLOSED --> OPEN : record_failure\nfailure_count >= threshold (3)
+
+    OPEN --> OPEN : can_execute = false\nHTTP 503 inmediato\nsin llamar al proveedor
+    OPEN --> HALF_OPEN : time.time() - last_failure_time >= 30s
+
+    HALF_OPEN --> CLOSED : record_success\nuna llamada de prueba exitosa\nfailure_count = 0
+    HALF_OPEN --> OPEN : record_failure\nprueba fallo\nlast_failure_time actualizado
+```

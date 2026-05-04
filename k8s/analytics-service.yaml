@@ -29,6 +29,13 @@ spec:
               value: "8004"
           ports:
             - containerPort: 8004
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             tcpSocket:
               port: 8004

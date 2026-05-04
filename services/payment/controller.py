@@ -1,3 +1,5 @@
+import os
+import random
 import uuid
 from fastapi import APIRouter, HTTPException
 from models import PaymentCreate
@@ -10,12 +12,24 @@ event_publisher = None
 circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30)
 
 
+def _payment_failure_rate() -> float:
+    raw_rate = os.getenv("PAYMENT_FAILURE_RATE", "0")
+    try:
+        rate = float(raw_rate)
+    except ValueError:
+        return 0.0
+    return min(max(rate, 0.0), 1.0)
+
+
 async def call_external_payment_provider(amount: float) -> dict:
     """
     Simulates an external payment provider call (e.g. Stripe, MercadoPago).
     In production, this would be an HTTP call to the provider's API.
     The circuit breaker wraps this call.
     """
+    if random.random() < _payment_failure_rate():
+        raise RuntimeError("simulated payment provider failure")
+
     return {
         "provider_ref": f"pay_{uuid.uuid4().hex[:12]}",
         "status": "completed",

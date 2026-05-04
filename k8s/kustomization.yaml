@@ -21,4 +21,5 @@ resources:
   - prometheus.yaml
   - grafana.yaml
   - locust.yaml
+  - hpa.yaml
   - ingress.yaml
