@@ -1,0 +1,15 @@
+---
+- name: Install NGINX Ingress Controller
+  hosts: local
+  gather_facts: false
+  tasks:
+    - name: Check kubectl is available
+      ansible.builtin.command: kubectl version --client --output=json
+      changed_when: false
+
+    - name: Apply ingress controller manifest
+      ansible.builtin.command: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/cloud/deploy.yaml
+
+    - name: Wait for ingress controller
+      ansible.builtin.command: kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
+      changed_when: false

@@ -1,0 +1,90 @@
+---
+- name: Load Terraform outputs and define hosts
+  hosts: local
+  gather_facts: false
+  tasks:
+    - name: Read Terraform outputs
+      ansible.builtin.command: terraform output -json
+      args:
+        chdir: "{{ terraform_dir }}"
+      register: tf_output
+      changed_when: false
+
+    - name: Parse Terraform outputs
+      ansible.builtin.set_fact:
+        tf_outputs: "{{ tf_output.stdout | from_json }}"
+
+    - name: Resolve cluster IPs
+      ansible.builtin.set_fact:
+        master_ip: "{{ tf_outputs.master_public_ip.value }}"
+        worker_ips: "{{ tf_outputs.worker_public_ips.value }}"
+
+    - name: Fail if SSH key path not provided
+      ansible.builtin.fail:
+        msg: "Set SSH_KEY_PATH env var to the private key used by Terraform key_pair_name."
+      when: ssh_private_key_path | length == 0
+
+    - name: Add master host
+      ansible.builtin.add_host:
+        name: master-1
+        ansible_host: "{{ master_ip }}"
+        ansible_user: "{{ ssh_user }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        groups: "masters,all_nodes"
+
+    - name: Add worker hosts
+      ansible.builtin.add_host:
+        name: "worker-{{ item }}"
+        ansible_host: "{{ worker_ips[item | int] }}"
+        ansible_user: "{{ ssh_user }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        groups: "workers,all_nodes"
+      loop: "{{ range(0, worker_ips | length) | list }}"
+
+- name: Remove workloads from the cluster (best effort)
+  hosts: masters
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Delete booking manifests if present
+      ansible.builtin.command: kubectl delete -k {{ kustomize_dir }} --ignore-not-found
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      failed_when: false
+      changed_when: false
+
+    - name: Remove copied manifests
+      ansible.builtin.file:
+        path: "{{ kustomize_dir }}"
+        state: absent
+
+- name: Reset Kubernetes on all nodes
+  hosts: all_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Reset kubeadm
+      ansible.builtin.command: kubeadm reset -f
+      failed_when: false
+      changed_when: false
+
+    - name: Remove Kubernetes state directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/etcd
+        - /var/lib/kubelet
+        - /etc/cni/net.d
+        - /var/lib/cni
+
+    - name: Remove flannel interface if present
+      ansible.builtin.command: ip link delete flannel.1
+      failed_when: false
+      changed_when: false
+
+    - name: Flush iptables rules
+      ansible.builtin.command: iptables -F
+      failed_when: false
+      changed_when: false

@@ -1,0 +1,284 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+data:
+  business.json: |
+    {
+      "uid": "business-overview",
+      "title": "Business Overview",
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Bookings created (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(bookings_created_total{job=\"booking\"})"}
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Bookings confirmed (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 8, "y": 0, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(bookings_confirmed_total{job=\"booking\"})"}
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Bookings cancelled (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 16, "y": 0, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(bookings_cancelled_total{job=\"booking\"})"}
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Payments completed (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 0, "y": 6, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(payments_completed_total{job=\"payment\"})"}
+          ]
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Payments failed (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 8, "y": 6, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(payments_failed_total{job=\"payment\"})"}
+          ]
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Payments blocked (total)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 16, "y": 6, "w": 8, "h": 6},
+          "targets": [
+            {"expr": "sum(payments_circuit_open_total{job=\"payment\"})"}
+          ]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Booking rates (per minute)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum(rate(bookings_created_total{job=\"booking\"}[5m])) * 60",
+              "legendFormat": "created"
+            },
+            {
+              "expr": "sum(rate(bookings_confirmed_total{job=\"booking\"}[5m])) * 60",
+              "legendFormat": "confirmed"
+            },
+            {
+              "expr": "sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])) * 60",
+              "legendFormat": "cancelled"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Payment rates (per minute)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum(rate(payments_completed_total{job=\"payment\"}[5m])) * 60",
+              "legendFormat": "completed"
+            },
+            {
+              "expr": "sum(rate(payments_failed_total{job=\"payment\"}[5m])) * 60",
+              "legendFormat": "failed"
+            },
+            {
+              "expr": "sum(rate(payments_circuit_open_total{job=\"payment\"}[5m])) * 60",
+              "legendFormat": "circuit_open"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Cancellation ratio (%)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "fieldConfig": {"defaults": {"unit": "percent"}},
+          "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "100 * sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])) / (sum(rate(bookings_confirmed_total{job=\"booking\"}[5m])) + sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])))",
+              "legendFormat": "cancelled / (confirmed + cancelled)"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "Payment failure ratio (%)",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "fieldConfig": {"defaults": {"unit": "percent"}},
+          "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "100 * sum(rate(payments_failed_total{job=\"payment\"}[5m])) / (sum(rate(payments_completed_total{job=\"payment\"}[5m])) + sum(rate(payments_failed_total{job=\"payment\"}[5m])))",
+              "legendFormat": "failed / (completed + failed)"
+            }
+          ]
+        }
+      ]
+    }
+  technical.json: |
+    {
+      "uid": "tech-overview",
+      "title": "Technical Overview",
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "10s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "job",
+            "type": "query",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PROMETHEUS_DS"
+            },
+            "query": "label_values(http_requests_total, job)",
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "refresh": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Requests per second",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum by (job) (rate(http_requests_total{job=~\"$job\"}[5m]))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "5xx error rate (%)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "fieldConfig": {
+            "defaults": {"unit": "percent"}
+          },
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "100 * sum by (job) (rate(http_requests_total{job=~\"$job\", status=~\"5..\"}[5m])) / sum by (job) (rate(http_requests_total{job=~\"$job\"}[5m]))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "p95 request latency (s)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job=~\"$job\"}[5m])))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Average request latency (s)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum by (job) (rate(http_request_duration_seconds_sum{job=~\"$job\"}[5m])) / sum by (job) (rate(http_request_duration_seconds_count{job=~\"$job\"}[5m]))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "CPU usage (cores)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum by (job) (rate(process_cpu_seconds_total{job=~\"$job\"}[5m]))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Memory usage (bytes)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PROMETHEUS_DS"
+          },
+          "fieldConfig": {
+            "defaults": {"unit": "bytes"}
+          },
+          "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+          "targets": [
+            {
+              "expr": "sum by (job) (process_resident_memory_bytes{job=~\"$job\"})",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        }
+      ]
+    }

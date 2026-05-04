@@ -1,0 +1,453 @@
+---
+- name: Load Terraform outputs and define hosts
+  hosts: local
+  gather_facts: false
+  tasks:
+    - name: Read Terraform outputs
+      ansible.builtin.command: terraform output -json
+      args:
+        chdir: "{{ terraform_dir }}"
+      register: tf_output
+      changed_when: false
+
+    - name: Parse Terraform outputs
+      ansible.builtin.set_fact:
+        tf_outputs: "{{ tf_output.stdout | from_json }}"
+
+    - name: Resolve cluster IPs
+      ansible.builtin.set_fact:
+        master_ip: "{{ tf_outputs.master_public_ip.value }}"
+        worker_ips: "{{ tf_outputs.worker_public_ips.value }}"
+
+    - name: Fail if SSH key path not provided
+      ansible.builtin.fail:
+        msg: "Set SSH_KEY_PATH env var to the private key used by Terraform key_pair_name."
+      when: ssh_private_key_path | length == 0
+
+    - name: Check SSH key exists
+      ansible.builtin.stat:
+        path: "{{ ssh_private_key_path | expanduser }}"
+      register: ssh_key_stat
+
+    - name: Check local k8s manifests directory
+      ansible.builtin.stat:
+        path: "{{ k8s_local_dir }}"
+      register: k8s_dir_stat
+
+    - name: Fail if local k8s manifests directory missing
+      ansible.builtin.fail:
+        msg: "Local k8s directory not found at {{ k8s_local_dir }}"
+      when: not k8s_dir_stat.stat.exists
+
+    - name: Fail if SSH key missing
+      ansible.builtin.fail:
+        msg: "SSH key not found at {{ ssh_private_key_path }}"
+      when: not ssh_key_stat.stat.exists
+
+    - name: Add master host
+      ansible.builtin.add_host:
+        name: master-1
+        ansible_host: "{{ master_ip }}"
+        ansible_user: "{{ ssh_user }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        public_ip: "{{ master_ip }}"
+        groups: "masters,all_nodes"
+
+    - name: Add worker hosts
+      ansible.builtin.add_host:
+        name: "worker-{{ item }}"
+        ansible_host: "{{ worker_ips[item | int] }}"
+        ansible_user: "{{ ssh_user }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        groups: "workers,all_nodes"
+      loop: "{{ range(0, worker_ips | length) | list }}"
+
+- name: Prepare Kubernetes nodes
+  hosts: all_nodes
+  become: true
+  gather_facts: true
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+
+    - name: Restart kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+  tasks:
+    - name: Install base dependencies
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - conntrack
+          - curl
+          - ebtables
+          - ethtool
+          - gpg
+          - socat
+        update_cache: true
+
+    - name: Disable swap
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+
+    - name: Remove swap from fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s+sw\s+.*)$'
+        replace: '# \1'
+
+    - name: Ensure kernel modules are loaded
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Load kernel modules
+      ansible.builtin.command: modprobe {{ item }}
+      loop:
+        - overlay
+        - br_netfilter
+      changed_when: false
+
+    - name: Ensure sysctl settings
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: Install containerd
+      ansible.builtin.apt:
+        name: containerd
+        update_cache: true
+
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Ensure containerd config exists
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+      notify: Restart containerd
+
+    - name: Enable systemd cgroups for containerd
+      ansible.builtin.lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup\s*=\s*false'
+        line: '            SystemdCgroup = true'
+      notify: Restart containerd
+
+    - name: Add Kubernetes apt key
+      ansible.builtin.shell: |
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_version }}/deb/Release.key \
+          | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_version }}/deb/ /\n"
+
+    - name: Install Kubernetes packages
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        update_cache: true
+
+    - name: Hold Kubernetes packages
+      ansible.builtin.command: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+
+    - name: Pin kubelet to the node private IP
+      ansible.builtin.lineinfile:
+        path: /etc/default/kubelet
+        regexp: '^KUBELET_EXTRA_ARGS='
+        line: 'KUBELET_EXTRA_ARGS=--node-ip={{ ansible_default_ipv4.address }}'
+        create: true
+        mode: "0644"
+      notify: Restart kubelet
+
+    - name: Enable containerd and kubelet
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - containerd
+        - kubelet
+
+- name: Initialize control plane
+  hosts: masters
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Check if control plane is initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf
+
+    - name: Reset partially initialized control plane
+      ansible.builtin.command: kubeadm reset -f
+      when: not admin_conf.stat.exists
+      failed_when: false
+      changed_when: false
+
+    - name: Stop kubelet before cleanup
+      ansible.builtin.systemd:
+        name: kubelet
+        state: stopped
+      when: not admin_conf.stat.exists
+      failed_when: false
+
+    - name: Remove stale control plane state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/etcd
+        - /var/lib/kubelet
+        - /var/lib/cni
+      when: not admin_conf.stat.exists
+
+    - name: Recreate CNI directories after cleanup
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/cni/net.d
+        - /var/lib/cni
+      when: not admin_conf.stat.exists
+
+    - name: Restart containerd and kubelet after cleanup
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - containerd
+        - kubelet
+      when: not admin_conf.stat.exists
+
+    - name: Write kubeadm init configuration
+      ansible.builtin.copy:
+        dest: /tmp/kubeadm-init.yaml
+        mode: "0600"
+        content: |
+          apiVersion: {{ kubeadm_api_version }}
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: {{ ansible_default_ipv4.address }}
+            bindPort: 6443
+          nodeRegistration:
+            criSocket: unix:///run/containerd/containerd.sock
+            kubeletExtraArgs:
+              node-ip: {{ ansible_default_ipv4.address }}
+          ---
+          apiVersion: {{ kubeadm_api_version }}
+          kind: ClusterConfiguration
+          apiServer:
+            certSANs:
+              - {{ ansible_default_ipv4.address }}
+              - {{ public_ip }}
+          networking:
+            podSubnet: {{ pod_cidr }}
+      when: not admin_conf.stat.exists
+
+    - name: Initialize Kubernetes control plane
+      when: not admin_conf.stat.exists
+      block:
+        - name: Run kubeadm init
+          ansible.builtin.command: kubeadm init --config=/tmp/kubeadm-init.yaml
+          register: kubeadm_init
+          changed_when: true
+      rescue:
+        - name: Capture kubelet logs after kubeadm init failure
+          ansible.builtin.command: journalctl -xeu kubelet --no-pager -n 120
+          register: kubelet_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Capture containerd logs after kubeadm init failure
+          ansible.builtin.command: journalctl -xeu containerd --no-pager -n 120
+          register: containerd_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with kubeadm diagnostics
+          ansible.builtin.fail:
+            msg: |
+              kubeadm init failed.
+              stdout:
+              {{ kubeadm_init.stdout | default('') }}
+
+              stderr:
+              {{ kubeadm_init.stderr | default('') }}
+
+              kubelet journal:
+              {{ kubelet_journal.stdout | default('') }}
+
+              containerd journal:
+              {{ containerd_journal.stdout | default('') }}
+
+    - name: Wait for Kubernetes API server
+      ansible.builtin.wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: 6443
+        delay: 5
+        timeout: 180
+
+    - name: Re-check admin kubeconfig
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf_post
+
+    - name: Fail if control plane config is missing
+      ansible.builtin.fail:
+        msg: "kubeadm init did not create /etc/kubernetes/admin.conf"
+      when: not admin_conf_post.stat.exists
+
+    - name: Get join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_cmd
+      changed_when: false
+
+    - name: Store join command
+      ansible.builtin.set_fact:
+        kube_join_command: "{{ join_cmd.stdout }}"
+
+    - name: Ensure kubeconfig for kubectl
+      ansible.builtin.file:
+        path: "/home/{{ ssh_user }}/.kube"
+        state: directory
+        owner: "{{ ssh_user }}"
+        mode: "0755"
+
+    - name: Copy admin kubeconfig to user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ssh_user }}/.kube/config"
+        owner: "{{ ssh_user }}"
+        mode: "0644"
+        remote_src: true
+
+    - name: Install CNI plugin
+      ansible.builtin.command: kubectl apply -f {{ cni_manifest }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Allow scheduling on control plane (optional)
+      ansible.builtin.command: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+      when: allow_control_plane_schedule
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      failed_when: false
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check if worker already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join the cluster
+      ansible.builtin.command: "{{ hostvars[groups['masters'][0]].kube_join_command }}"
+      when: not kubelet_conf.stat.exists
+
+- name: Deploy workloads
+  hosts: masters
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for nodes to be Ready
+      ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Install local-path provisioner (optional)
+      ansible.builtin.command: kubectl apply -f {{ local_path_manifest }}
+      when: install_local_path_provisioner
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Wait for storage class
+      ansible.builtin.command: kubectl get storageclass
+      when: install_local_path_provisioner
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Sync K8s manifests to master
+      ansible.builtin.copy:
+        src: "{{ k8s_local_dir }}/"
+        dest: "{{ kustomize_dir }}/"
+        owner: "{{ ssh_user }}"
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Apply kustomize manifests
+      ansible.builtin.command: kubectl apply -k {{ kustomize_dir }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Install ingress controller (optional)
+      ansible.builtin.command: kubectl apply -f {{ ingress_controller_manifest }}
+      when: install_ingress_controller
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Wait for deployments to be ready
+      ansible.builtin.command: kubectl -n {{ namespace }} rollout status deployment/{{ item }} --timeout=300s
+      loop: "{{ deployments }}"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Get frontend NodePort
+      ansible.builtin.command: kubectl -n {{ namespace }} get svc frontend -o jsonpath='{.spec.ports[0].nodePort}'
+      register: frontend_nodeport
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Get Grafana NodePort
+      ansible.builtin.command: kubectl -n {{ namespace }} get svc grafana -o jsonpath='{.spec.ports[0].nodePort}'
+      register: grafana_nodeport
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Get Locust NodePort
+      ansible.builtin.command: kubectl -n {{ namespace }} get svc locust -o jsonpath='{.spec.ports[0].nodePort}'
+      register: locust_nodeport
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Print access URLs
+      ansible.builtin.debug:
+        msg:
+          - "Web: http://{{ hostvars['master-1'].public_ip }}:{{ frontend_nodeport.stdout }}"
+          - "Grafana: http://{{ hostvars['master-1'].public_ip }}:{{ grafana_nodeport.stdout }} (admin/admin)"
+          - "Locust: http://{{ hostvars['master-1'].public_ip }}:{{ locust_nodeport.stdout }}"

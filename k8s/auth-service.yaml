@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: davidlondo/the-booking-project:auth
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MONGO_URL
+              value: mongodb://mongo:27017
+            - name: MONGO_DB
+              value: auth_db
+            - name: JWT_SECRET
+              value: change-this-secret-in-production
+            - name: PORT
+              value: "8005"
+          ports:
+            - containerPort: 8005
+          readinessProbe:
+            tcpSocket:
+              port: 8005
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8005
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - name: http
+      port: 8005
+      targetPort: 8005
