@@ -2,7 +2,14 @@ from fastapi import APIRouter, HTTPException, Query
 from models import BookingCreate
 from datetime import datetime as dt
 import httpx
-from metrics import BOOKINGS_CONFIRMED, BOOKINGS_CANCELLED, BOOKINGS_CREATED
+from metrics import (
+    BOOKINGS_CONFIRMED,
+    BOOKINGS_CONFIRMED_AMOUNT,
+    BOOKINGS_CANCELLED,
+    BOOKINGS_CANCELLED_AMOUNT,
+    BOOKINGS_CREATED,
+    BOOKINGS_CREATED_AMOUNT,
+)
 
 router = APIRouter()
 repo = None
@@ -94,6 +101,7 @@ async def get_available_slots(
 async def create_booking(data: BookingCreate):
     booking = await repo.create(data.model_dump())
     BOOKINGS_CREATED.inc()
+    BOOKINGS_CREATED_AMOUNT.inc(data.amount)
 
     if data.amount > 0:
         # Execute saga: booking -> payment
@@ -106,6 +114,7 @@ async def create_booking(data: BookingCreate):
         )
         await saga.events.publish("booking.confirmed", confirmed)
         BOOKINGS_CONFIRMED.inc()
+        BOOKINGS_CONFIRMED_AMOUNT.inc(data.amount)
         return confirmed
 
 
@@ -130,4 +139,5 @@ async def cancel_booking(id: str):
     )
     await saga.events.publish("booking.cancelled", cancelled)
     BOOKINGS_CANCELLED.inc()
+    BOOKINGS_CANCELLED_AMOUNT.inc(booking.get("amount", 0))
     return cancelled

@@ -5,11 +5,11 @@ metadata:
 data:
   business.json: |
     {
-      "uid": "business-overview",
-      "title": "Business Overview",
+      "uid": "platform-business-overview",
+      "title": "Platform Business Overview",
       "timezone": "browser",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "10s",
       "time": {
         "from": "now-6h",
@@ -19,9 +19,9 @@ data:
         {
           "id": 1,
           "type": "stat",
-          "title": "Bookings created (total)",
+          "title": "Booking demand (total)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6},
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 6},
           "targets": [
             {"expr": "sum(bookings_created_total{job=\"booking\"})"}
           ]
@@ -29,9 +29,9 @@ data:
         {
           "id": 2,
           "type": "stat",
-          "title": "Bookings confirmed (total)",
+          "title": "Confirmed bookings (total)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 8, "y": 0, "w": 8, "h": 6},
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 6},
           "targets": [
             {"expr": "sum(bookings_confirmed_total{job=\"booking\"})"}
           ]
@@ -39,47 +39,82 @@ data:
         {
           "id": 3,
           "type": "stat",
-          "title": "Bookings cancelled (total)",
+          "title": "Booking conversion (%)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 16, "y": 0, "w": 8, "h": 6},
+          "fieldConfig": {"defaults": {"unit": "percent"}},
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 6},
           "targets": [
-            {"expr": "sum(bookings_cancelled_total{job=\"booking\"})"}
+            {
+              "expr": "100 * sum(bookings_confirmed_total{job=\"booking\"}) / clamp_min(sum(bookings_created_total{job=\"booking\"}), 1)"
+            }
           ]
         },
         {
           "id": 4,
           "type": "stat",
-          "title": "Payments completed (total)",
+          "title": "GMV captured",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 0, "y": 6, "w": 8, "h": 6},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 6},
           "targets": [
-            {"expr": "sum(payments_completed_total{job=\"payment\"})"}
+            {"expr": "sum(payments_completed_amount_total{job=\"payment\"})"}
           ]
         },
         {
           "id": 5,
           "type": "stat",
-          "title": "Payments failed (total)",
+          "title": "Payment success (%)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 8, "y": 6, "w": 8, "h": 6},
+          "fieldConfig": {"defaults": {"unit": "percent"}},
+          "gridPos": {"x": 0, "y": 6, "w": 6, "h": 6},
           "targets": [
-            {"expr": "sum(payments_failed_total{job=\"payment\"})"}
+            {
+              "expr": "100 * sum(payments_completed_total{job=\"payment\"}) / clamp_min(sum(payments_completed_total{job=\"payment\"}) + sum(payments_failed_total{job=\"payment\"}) + sum(payments_circuit_open_total{job=\"payment\"}), 1)"
+            }
           ]
         },
         {
           "id": 6,
           "type": "stat",
-          "title": "Payments blocked (total)",
+          "title": "Payment incidents (total)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "gridPos": {"x": 16, "y": 6, "w": 8, "h": 6},
+          "gridPos": {"x": 6, "y": 6, "w": 6, "h": 6},
           "targets": [
-            {"expr": "sum(payments_circuit_open_total{job=\"payment\"})"}
+            {
+              "expr": "sum(payments_failed_total{job=\"payment\"}) + sum(payments_circuit_open_total{job=\"payment\"})"
+            }
           ]
         },
         {
           "id": 7,
+          "type": "stat",
+          "title": "GMV lost to payment issues",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
+          "gridPos": {"x": 12, "y": 6, "w": 6, "h": 6},
+          "targets": [
+            {
+              "expr": "sum(payments_failed_amount_total{job=\"payment\"}) + sum(payments_circuit_open_amount_total{job=\"payment\"})"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "stat",
+          "title": "Average paid ticket",
+          "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
+          "gridPos": {"x": 18, "y": 6, "w": 6, "h": 6},
+          "targets": [
+            {
+              "expr": "sum(payments_completed_amount_total{job=\"payment\"}) / clamp_min(sum(payments_completed_total{job=\"payment\"}), 1)"
+            }
+          ]
+        },
+        {
+          "id": 9,
           "type": "timeseries",
-          "title": "Booking rates (per minute)",
+          "title": "Booking funnel (per minute)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
           "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
           "targets": [
@@ -98,9 +133,9 @@ data:
           ]
         },
         {
-          "id": 8,
+          "id": 10,
           "type": "timeseries",
-          "title": "Payment rates (per minute)",
+          "title": "Payment outcomes (per minute)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
           "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
           "targets": [
@@ -114,35 +149,43 @@ data:
             },
             {
               "expr": "sum(rate(payments_circuit_open_total{job=\"payment\"}[5m])) * 60",
-              "legendFormat": "circuit_open"
+              "legendFormat": "blocked"
             }
           ]
         },
         {
-          "id": 9,
+          "id": 11,
           "type": "timeseries",
-          "title": "Cancellation ratio (%)",
+          "title": "GMV flow (per minute)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
-          "fieldConfig": {"defaults": {"unit": "percent"}},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
           "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
           "targets": [
             {
-              "expr": "100 * sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])) / (sum(rate(bookings_confirmed_total{job=\"booking\"}[5m])) + sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])))",
-              "legendFormat": "cancelled / (confirmed + cancelled)"
+              "expr": "sum(rate(payments_completed_amount_total{job=\"payment\"}[5m])) * 60",
+              "legendFormat": "captured"
+            },
+            {
+              "expr": "(sum(rate(payments_failed_amount_total{job=\"payment\"}[5m])) + sum(rate(payments_circuit_open_amount_total{job=\"payment\"}[5m]))) * 60",
+              "legendFormat": "lost"
             }
           ]
         },
         {
-          "id": 10,
+          "id": 12,
           "type": "timeseries",
-          "title": "Payment failure ratio (%)",
+          "title": "Platform friction (%)",
           "datasource": {"type": "prometheus", "uid": "PROMETHEUS_DS"},
           "fieldConfig": {"defaults": {"unit": "percent"}},
           "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
           "targets": [
             {
-              "expr": "100 * sum(rate(payments_failed_total{job=\"payment\"}[5m])) / (sum(rate(payments_completed_total{job=\"payment\"}[5m])) + sum(rate(payments_failed_total{job=\"payment\"}[5m])))",
-              "legendFormat": "failed / (completed + failed)"
+              "expr": "100 * sum(rate(bookings_cancelled_total{job=\"booking\"}[5m])) / clamp_min(sum(rate(bookings_created_total{job=\"booking\"}[5m])), 0.001)",
+              "legendFormat": "booking cancellations"
+            },
+            {
+              "expr": "100 * (sum(rate(payments_failed_total{job=\"payment\"}[5m])) + sum(rate(payments_circuit_open_total{job=\"payment\"}[5m]))) / clamp_min(sum(rate(payments_completed_total{job=\"payment\"}[5m])) + sum(rate(payments_failed_total{job=\"payment\"}[5m])) + sum(rate(payments_circuit_open_total{job=\"payment\"}[5m])), 0.001)",
+              "legendFormat": "payment friction"
             }
           ]
         }
