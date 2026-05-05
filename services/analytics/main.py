@@ -9,6 +9,7 @@ from controller import router
 import controller
 from repository import AnalyticsWriteRepository, AnalyticsReadRepository
 from event_handler import AnalyticsEventHandler
+from platform_metrics import PlatformMetricsRefresher
 
 BUSINESS_TIMEOUT = 5.0
 POOL_LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5)
@@ -31,10 +32,13 @@ async def lifespan(app: FastAPI):
         write_repo,
         read_repo,
     )
+    metrics_refresher = PlatformMetricsRefresher(read_repo)
     await handler.start()
+    await metrics_refresher.start()
 
     yield
 
+    await metrics_refresher.stop()
     await handler.stop()
     await controller.business_client.aclose()
     client.close()

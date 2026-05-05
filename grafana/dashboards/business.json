@@ -51,7 +51,9 @@
       "fieldConfig": {"defaults": {"unit": "currencyUSD"}},
       "gridPos": {"x": 18, "y": 0, "w": 6, "h": 6},
       "targets": [
-        {"expr": "sum(payments_completed_amount_total{job=\"payment\"})"}
+        {
+          "expr": "sum(platform_total_revenue{job=\"analytics\"}) or sum(payments_completed_amount_total{job=\"payment\"}) or vector(0)"
+        }
       ]
     },
     {
@@ -88,7 +90,7 @@
       "gridPos": {"x": 12, "y": 6, "w": 6, "h": 6},
       "targets": [
         {
-          "expr": "sum(payments_failed_amount_total{job=\"payment\"}) + sum(payments_circuit_open_amount_total{job=\"payment\"})"
+          "expr": "(sum(payments_failed_amount_total{job=\"payment\"}) + sum(payments_circuit_open_amount_total{job=\"payment\"})) or vector(0)"
         }
       ]
     },
@@ -101,7 +103,7 @@
       "gridPos": {"x": 18, "y": 6, "w": 6, "h": 6},
       "targets": [
         {
-          "expr": "sum(payments_completed_amount_total{job=\"payment\"}) / clamp_min(sum(payments_completed_total{job=\"payment\"}), 1)"
+          "expr": "((sum(platform_total_revenue{job=\"analytics\"}) or sum(payments_completed_amount_total{job=\"payment\"}) or vector(0))) / clamp_min((sum(platform_confirmed_bookings{job=\"analytics\"}) or sum(bookings_confirmed_total{job=\"booking\"}) or vector(0)), 1)"
         }
       ]
     },
@@ -156,11 +158,11 @@
       "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
       "targets": [
         {
-          "expr": "sum(rate(payments_completed_amount_total{job=\"payment\"}[5m])) * 60",
+          "expr": "(sum(rate(payments_completed_amount_total{job=\"payment\"}[5m])) * 60) or vector(0)",
           "legendFormat": "captured"
         },
         {
-          "expr": "(sum(rate(payments_failed_amount_total{job=\"payment\"}[5m])) + sum(rate(payments_circuit_open_amount_total{job=\"payment\"}[5m]))) * 60",
+          "expr": "((sum(rate(payments_failed_amount_total{job=\"payment\"}[5m])) + sum(rate(payments_circuit_open_amount_total{job=\"payment\"}[5m]))) * 60) or vector(0)",
           "legendFormat": "lost"
         }
       ]

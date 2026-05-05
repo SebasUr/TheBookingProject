@@ -80,6 +80,28 @@ class AnalyticsReadRepository:
             "total_revenue": 0,
         }
 
+    async def get_platform_totals(self):
+        pipeline = [
+            {
+                "$group": {
+                    "_id": None,
+                    "total_bookings": {"$sum": "$total_bookings"},
+                    "confirmed_bookings": {"$sum": "$confirmed_bookings"},
+                    "cancelled_bookings": {"$sum": "$cancelled_bookings"},
+                    "total_revenue": {"$sum": "$total_revenue"},
+                }
+            },
+        ]
+        async for doc in self.summaries.aggregate(pipeline):
+            doc.pop("_id", None)
+            return doc
+        return {
+            "total_bookings": 0,
+            "confirmed_bookings": 0,
+            "cancelled_bookings": 0,
+            "total_revenue": 0,
+        }
+
     def _to_dict(self, doc):
         if not doc:
             return None
